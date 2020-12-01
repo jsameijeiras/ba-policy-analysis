@@ -1,0 +1,423 @@
+---
+title: "Behavioural Economics - Policy Brief"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+#Libraries to be uploaded
+
+```{r}
+library(tidyverse)
+library(FSA)
+library(ggthemes)
+library(qwraps2)
+library(lemon)
+
+
+```
+
+We created some functions to helps as arrange our data
+
+```{r}
+create_group_column <- function(sample){
+  
+  output <- sample %>%
+    mutate(group = ifelse(!is.na(`Can you help us out and answer a 1 minute survey on your experiences with COVID-19?`),
+                          "Control",
+                          ifelse(!is.na(`Can you help us out and answer a 1 minute survey on your experiences with COVID-19?_1`),
+                                 "Unconditional",
+                                 ifelse(!is.na(`Can you help us out and answer a 1 minute survey on your experiences with COVID-19? After answering the survey you have a chance of winning a 30 Euro Amazon Gift Card!`),
+                                        "Conditional",
+                                        ""))))
+  
+  return(output)
+}
+
+create_length_columns <- function(sample){
+  
+  output <- mutate(sample, 
+         length_open_question_2 = ifelse(is.na(str_length(`Can you briefly explain us how you would solve this crisis? We are looking for help from citizens so maybe you can think of a daily situation that in your opinion is easily solvable.`)),
+                                         0,
+                                         str_length(`Can you briefly explain us how you would solve this crisis? We are looking for help from citizens so maybe you can think of a daily situation that in your opinion is easily solvable.`)),
+         length_feedback = ifelse(is.na(str_length(`Can you help us improve with some feedback?`)),
+                                         0,
+                                         str_length(`Can you help us improve with some feedback?`)),
+         length_open_question_1 = ifelse(is.na(str_length(`How has the COVID-19 pandemic affected your day-to-day life?`)),
+                                         0,
+                                         str_length(`How has the COVID-19 pandemic affected your day-to-day life?`)))%>%
+  mutate(total_length = length_open_question_2 + length_open_question_1 + length_feedback)
+  
+  return(output)
+  
+}
+
+
+dummy_email <- function(sample) {
+  
+  #For simplicity we assume any answer is an email.
+  #Non strange email was found when eyeballing the data.
+  #A regex could be constructed for better checks.
+  output <- sample %>%
+    mutate(email = ifelse(is.na(`If you enter your email here you will participate in 30 Euro Amazon Gift Card Lottery. If you win, on the 2nd of December we will send you an email with the gift card. Wish you luck!`),
+                                        0,
+                                        1))
+  return(output)
+}
+
+relevant_columns = c("IP Address" ,
+                     "Progress",
+                     "Duration (in seconds)",
+                     "Finished",
+                     "Response ID",
+                     "Location Latitude",
+                     "Location Longitude",
+                     "Do you believe COVID-19 exists?",
+                     "Do you think the government should increase restrictions?","Have you tested positive at some point?",
+                     "How has the COVID-19 pandemic affected your day-to-day life?",
+                     "Can you briefly explain us how you would solve this crisis? We are looking for help from citizens so maybe you can think of a daily situation that in your opinion is easily solvable.","Which is your year of birth?",
+                     "Where are you from? Please indicate your country (e.g. Spain)",
+                     "What is your current employment status?",
+                     "Can you help us improve with some feedback?",
+                     "sample",
+                     "group",
+                     "length_open_question_2",
+                     "length_feedback",
+                     "length_open_question_1",
+                     "total_length",
+                     "email")
+
+```
+
+
+
+# Reading and Cleaning the data
+
+```{r}
+route_ad_survey = "G:/My Drive/Behavioural Economics/Policy Brief/Facebook_Survey_Clean.csv"
+
+route_fff_survey = "G:/My Drive/Behavioural Economics/Policy Brief/Friends_Survey_Clean.csv"
+```
+
+
+We have two datasets, one for the ad and other for the data collected from sending the survey to friends. We read them both and prepare the data to work with both datasets together and alone. We create a label, sample, that can be Facebook Ads (FA) or Family and Friends(FF).
+```{r}
+ad_sample <- read_csv(route_ad_survey,
+                      col_types = cols(`Duration (in seconds)` = col_number(),
+                                       `Location Latitude` = col_number(),
+                                       `Location Longitude` = col_number())) %>%
+  dummy_email() %>%
+  mutate(sample = "FA") %>%
+  create_group_column() %>%
+  create_length_columns() %>%
+  select(relevant_columns) %>%
+  mutate(dummy_control = ifelse(group == "Control",1,0),
+         dummy_treatment_conditional = ifelse(group == "Conditional",1,0),
+         dummy_treatment_unconditional = ifelse(group == "Unconditional",1,0)) %>%
+  mutate(dummy_FA = ifelse(sample == "FA",1,0),
+         dummy_FF = ifelse(sample == "FF",1,0)) %>%
+  rename("Year" = `Which is your year of birth?`) %>%
+  mutate("Age" = lubridate::year(lubridate::now()) - Year) 
+
+ad_sample$completion_rate <- 1 - rowSums(is.na(ad_sample))/ncol(ad_sample)
+
+fff_sample <- read_csv(route_fff_survey,
+                      col_types = cols(`Duration (in seconds)` = col_number(),
+                                       `Location Latitude` = col_number(),
+                                       `Location Longitude` = col_number())) %>%
+  dummy_email() %>%
+  mutate(sample = "FF") %>%
+  create_group_column() %>%
+  create_length_columns() %>%
+  select(relevant_columns)%>%
+  mutate(dummy_control = ifelse(group == "Control",1,0),
+         dummy_treatment_conditional = ifelse(group == "Conditional",1,0),
+         dummy_treatment_unconditional = ifelse(group == "Unconditional",1,0))  %>%
+  mutate(dummy_FA = ifelse(sample == "FA",1,0),
+         dummy_FF = ifelse(sample == "FF",1,0))%>%
+  rename("Year" = `Which is your year of birth?`) %>%
+  mutate("Age" = lubridate::year(lubridate::now()) - Year)
+
+fff_sample$completion_rate <- 1 -  rowSums(is.na(fff_sample))/ncol(fff_sample)
+
+total_sample <- rbind(ad_sample, fff_sample)
+
+random_fff_sample <- sample_n(fff_sample, 48)
+
+sample_adjusted <- rbind(ad_sample, random_fff_sample)
+```
+
+
+
+# Exploring the data
+```{r, warning=FALSE}
+hist(total_sample$total_length, breaks = 100)
+hist(total_sample$Age, breaks = 100)
+
+
+hist(ad_sample$total_length, breaks = 100)
+hist(ad_sample$Age, breaks = 100)
+
+hist(fff_sample$total_length, breaks = 100)
+hist(fff_sample$Age, breaks = 100)
+
+```
+
+```{r, warning=FALSE}
+ggplot(data=ad_sample, aes(x=group,y=length_open_question_1))+geom_boxplot()
+ggplot(data=ad_sample, aes(x=group,y=length_open_question_2))+geom_boxplot()
+ggplot(data=ad_sample, aes(x=group,y=length_feedback))+geom_boxplot()
+ggplot(data=ad_sample, aes(x=group,y=total_length))+
+  geom_boxplot() +
+  theme_tufte()
+```
+
+```{r, warning=FALSE,echo = FALSE}
+p <- total_sample %>%
+  ggplot( aes(x=total_length, fill=sample)) +
+    geom_histogram(alpha=0.6, position = 'identity', binwidth = 50) +
+    theme_minimal() +
+    labs(fill="", y = "Count", 
+         x = "Sum of characters in all the open questions",
+         title = "Different approaches lead to different distributions",
+         subtitle = "Facebook ads vs Family and Friends",
+         caption = "Data collected between 15 Nov until 1st Dec")
+
+p
+```
+
+```{r, warning=FALSE}
+p <- total_sample %>%
+  ggplot( aes(x=completion_rate, fill=sample)) +
+    geom_histogram(alpha=0.6, position = 'identity', binwidth = 0.05) +
+    theme_minimal() +
+    labs(fill="", y = "Count", 
+         x = "Completion Rate is bigger in Facebook Ads Sample",
+         title = "Different approaches lead to different distributions",
+         subtitle = "Facebook ads vs Family and Friends",
+         caption = "Data collected between 15 Nov until 1st Dec")
+
+p
+```
+
+
+```{r, warning=FALSE}
+# scatter plot
+sp <-ggplot(total_sample, aes(x = `Do you believe COVID-19 exists?`, y = total_length)) + geom_boxplot()+
+  geom_smooth(method = "lm")  +
+    theme_minimal() +
+    labs(fill="", y = "Total length of open questions", 
+         x = "Do you believe COVID-19 exists?",
+         title = "Do you believe COVID-19 exists?",
+         subtitle = "The interest in the topic generates outliers",
+         caption = "Data collected between 15 Nov until 1st Dec")
+
+sp
+```
+
+
+```{r, warning=FALSE}
+# scatter plot
+sp <-ggplot(total_sample, aes(x = `Do you think the government should increase restrictions?`, y = total_length)) + geom_boxplot()
+# Change x and y axis labels, and limits
+sp +theme_minimal() +
+    labs(fill="", y = "Total length of open questions", 
+         x = "",
+         title = "Do you think the government should increase restrictions?",
+         subtitle = " ",
+         caption = "Data collected between 15 Nov until 1st Dec")
+```
+
+
+# Summary Statistics
+```{r, results = "asis"}
+
+options(qwraps2_markup = 'markdown')
+summary_statistics <-
+  list("Age" =
+       list("min"       = ~ min(Age, na.rm = T),
+            "max"       = ~ max(Age, na.rm = T),
+            "mean (sd)" = ~ qwraps2::mean_sd(Age, na_rm = T)),
+      "Length Open Question 1" =
+       list("min"       = ~ min(length_open_question_1),
+            "max"       = ~ max(length_open_question_1),
+            "mean (sd)" = ~ qwraps2::mean_sd(length_open_question_1)),
+       "Length Open Question 2" =
+       list("min"       = ~ min(length_open_question_2),
+            "median"    = ~ median(length_open_question_2),
+            "max"       = ~ max(length_open_question_2),
+            "mean (sd)" = ~ qwraps2::mean_sd(length_open_question_2)),
+       "Length Feedback" =
+       list("min"       = ~ min(length_feedback),
+            "max"       = ~ max(length_feedback),
+            "mean (sd)" = ~ qwraps2::mean_sd(length_feedback)),
+       "Completion Rate" =
+       list("min"       = ~ min(completion_rate),
+            "max"       = ~ max(completion_rate),
+            "mean (sd)" = ~ qwraps2::mean_sd(completion_rate))
+       )
+
+comparison_samples <- summary_table(total_sample, summary_statistics, "sample")
+ad_sample_ds <- summary_table(ad_sample, summary_statistics, "group")
+fff_sample_ds <- summary_table(fff_sample, summary_statistics, "group")
+print(comparison_samples, rtitle = "Summary Statistics") 
+print(ad_sample_ds, rtitle = "Summary Statistics Facebook Ads")
+print(fff_sample_ds, rtitle = "Summary Statistics Family and Friends Distribution")
+
+```
+
+
+# Regression Analysis Ad Sample
+```{r}
+regression_totallength <- lm(ad_sample$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional , data=ad_sample)
+
+regression_totallength_full<- lm(ad_sample$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional + Age, data=ad_sample)
+
+regression_completionrate <- lm(ad_sample$completion_rate ~ dummy_treatment_conditional + dummy_treatment_unconditional , data=ad_sample)
+
+regression_completionrate_full<- lm(ad_sample$completion_rate ~ dummy_treatment_conditional + dummy_treatment_unconditional + Age , data=ad_sample)
+
+jtools::export_summs(regression_totallength,
+                     regression_totallength_full, 
+                     regression_completionrate,
+                     regression_completionrate_full, 
+                     coefs = c("Conditional" = "dummy_treatment_conditional",
+                               "Unconditional" = "dummy_treatment_unconditional",
+                               "Age"="Age"),
+                     model.names = c("Total Length",
+                                     "Total Length", 
+                                     "Completion Rate",
+                                     "Completion Rate"),
+                     statistics = "all",
+                     error_format = "({statistic}, p = {p.value})")
+```
+
+# Regression Analysis Friends and Family
+```{r}
+regression_totallength <- lm(fff_sample$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional , data=fff_sample)
+
+regression_totallength_full<- lm(fff_sample$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional + Age, data=fff_sample)
+
+regression_completionrate <- lm(fff_sample$completion_rate ~ dummy_treatment_conditional + dummy_treatment_unconditional , data=fff_sample)
+
+regression_completionrate_full<- lm(fff_sample$completion_rate ~ dummy_treatment_conditional + dummy_treatment_unconditional + Age , data=fff_sample)
+
+jtools::export_summs(regression_totallength,
+                     regression_totallength_full, 
+                     regression_completionrate,
+                     regression_completionrate_full, 
+                     coefs = c("Conditional" = "dummy_treatment_conditional",
+                               "Unconditional" = "dummy_treatment_unconditional",
+                               "Age"="Age"),
+                     model.names = c("Total Length",
+                                     "Total Length", 
+                                     "Completion Rate",
+                                     "Completion Rate"),
+                     statistics = "all",
+                     error_format = "({statistic}, p = {p.value})")
+```
+
+# Regression Analysis Comparison
+```{r, echo=FALSE, war}
+knit_print.data.frame <- lemon_print
+
+regression_totallength_ad <- lm(ad_sample$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional , data=ad_sample)
+
+regression_totallength <- lm(sample_adjusted$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional , data=sample_adjusted)
+
+regression_totallength_full<- lm(sample_adjusted$total_length ~ dummy_treatment_conditional + dummy_treatment_unconditional + Age + sample, data=sample_adjusted)
+
+regression_completionrate <- lm(sample_adjusted$completion_rate ~ dummy_treatment_conditional + dummy_treatment_unconditional  , data=sample_adjusted)
+
+regression_completionrate_full<- lm(sample_adjusted$completion_rate ~ dummy_treatment_conditional + dummy_treatment_unconditional + Age + sample , data=sample_adjusted)
+
+jtools::export_summs(regression_totallength,
+                     regression_totallength_full, 
+                     regression_completionrate,
+                     regression_completionrate_full,
+                     regression_totallength_ad,
+                     model.names = c("Total Length",
+                                     "Total Length", 
+                                     "Completion Rate",
+                                     "Completion Rate",
+                                     "Total Length Ad Sample"),
+                     coefs = c("Conditional" = "dummy_treatment_conditional",
+                               "Unconditional" = "dummy_treatment_unconditional",
+                               "Dummy FF" = "sampleFF",
+                               "Age"="Age"
+                               ),
+                     error_format = "({statistic}, p = {p.value})")
+
+
+```
+
+#Non Parametric Analysis
+
+## Checking Facebook Ads Sample
+Assumptions of Kruskall-Wallis:
+1. All samples are individual, no subject answered twice.
+2. We have 3 groups
+
+We need to test for homogeneity of variances
+```{r}
+bartlett.test(length_open_question_1~group,data=ad_sample)
+bartlett.test(length_open_question_2~group,data=ad_sample)
+bartlett.test(length_feedback~group,data=ad_sample)
+```
+
+```{r}
+kruskal.test(length_open_question_1~group,data=ad_sample)
+kruskal.test(length_open_question_2~group,data=ad_sample)
+kruskal.test(length_feedback~group,data=ad_sample)
+```
+
+```{r}
+dunnTest(length_open_question_1~group,data=ad_sample,method="holm",altp=TRUE)
+dunnTest(length_open_question_2~group,data=ad_sample,method="holm",altp=TRUE)
+dunnTest(length_feedback~group,data=ad_sample)
+```
+```{r}
+
+bartlett.test(total_length~group,data=ad_sample)
+```
+
+```{r}
+bartlett.test(total_length~group,data=ad_sample)
+kruskal.test(total_length~group,data=ad_sample)
+dunnTest(total_length~group,data=ad_sample,method="bonferroni")
+
+```
+
+## Checking Family and Friends Sample
+
+
+We need to test for homogeneity of variances
+```{r}
+bartlett.test(length_open_question_1~group,data=fff_sample)
+bartlett.test(length_open_question_2~group,data=fff_sample)
+bartlett.test(length_feedback~group,data=fff_sample)
+```
+
+```{r}
+kruskal.test(length_open_question_1~group,data=fff_sample)
+kruskal.test(length_open_question_2~group,data=fff_sample)
+kruskal.test(length_feedback~group,data=fff_sample)
+```
+
+```{r}
+dunnTest(length_open_question_1~group,data=fff_sample,method="holm",altp=TRUE)
+dunnTest(length_open_question_2~group,data=fff_sample,method="holm",altp=TRUE)
+dunnTest(length_feedback~group,data=fff_sample)
+```
+```{r}
+bartlett.test(total_length~group,data=fff_sample)
+```
+
+```{r}
+bartlett.test(total_length~group,data=fff_sample)
+kruskal.test(total_length~group,data=fff_sample)
+dunnTest(total_length~group,data=fff_sample,method="bonferroni")
+
+```
