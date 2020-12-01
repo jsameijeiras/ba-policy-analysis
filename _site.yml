@@ -1,0 +1,12 @@
+name: "Behavioural Economics - Policy Brief"
+output_dir: "docs"
+navbar:
+  title: "Policy Brief"
+  left:
+  - text: "Home"
+   href: index.html
+  - text: ""
+   href: policy-analysis.html
+output:
+  html_document:
+ theme: cosmo
